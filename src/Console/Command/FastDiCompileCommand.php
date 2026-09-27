@@ -26,6 +26,11 @@ class FastDiCompileCommand extends Command
     private const PROCESS_TIMEOUT_SECONDS = 15;
 
     /**
+     * Maximum configurable compiler timeout.
+     */
+    private const MAX_PROCESS_TIMEOUT_SECONDS = 86400;
+
+    /**
      * Maximum accepted worker count for the Rust compiler.
      */
     private const MAX_JOBS = 256;
@@ -141,6 +146,12 @@ class FastDiCompileCommand extends Command
                 'Number of parallel jobs (default: number of CPUs)'
             )
             ->addOption(
+                'timeout',
+                null,
+                InputOption::VALUE_REQUIRED,
+                'Maximum compiler runtime in seconds (default: 15)'
+            )
+            ->addOption(
                 'fallback-php',
                 null,
                 InputOption::VALUE_REQUIRED,
@@ -219,6 +230,7 @@ class FastDiCompileCommand extends Command
 
         try {
             $magentoRoot = $this->getMagentoRoot();
+            $processTimeout = $this->getProcessTimeout($input);
             $command = $this->buildCompilerCommand($input, $output, $magentoRoot);
         } catch (InvalidArgumentException | RuntimeException $exception) {
             $this->writeError($output, $exception->getMessage());
@@ -232,7 +244,7 @@ class FastDiCompileCommand extends Command
             $magentoRoot,
             $this->getRestrictedEnvironment($magentoRoot)
         );
-        $process->setTimeout($this->processTimeout);
+        $process->setTimeout($processTimeout);
 
         try {
             $exitCode = $process->run(
@@ -248,7 +260,7 @@ class FastDiCompileCommand extends Command
             $process->stop(0.0);
             $this->writeError(
                 $output,
-                'fast-di-compile timed out after ' . $this->processTimeout . ' seconds.'
+                'fast-di-compile timed out after ' . $processTimeout . ' seconds.'
             );
             return Cli::RETURN_FAILURE;
         } catch (RuntimeException $exception) {
@@ -355,6 +367,34 @@ class FastDiCompileCommand extends Command
 
         $command[] = '--jobs';
         $command[] = (string) $jobsCount;
+    }
+
+    /**
+     * Resolve the configured process timeout.
+     *
+     * @param InputInterface $input
+     * @return float
+     */
+    private function getProcessTimeout(InputInterface $input): float
+    {
+        $timeout = $input->getOption('timeout');
+        if ($timeout === null) {
+            return $this->processTimeout;
+        }
+
+        $timeout = (string) $timeout;
+        if (preg_match('/^[1-9][0-9]*$/', $timeout) !== 1) {
+            throw new InvalidArgumentException('--timeout must be a positive integer.');
+        }
+
+        $timeoutSeconds = (int) $timeout;
+        if ($timeoutSeconds > self::MAX_PROCESS_TIMEOUT_SECONDS) {
+            throw new InvalidArgumentException(
+                '--timeout must be less than or equal to ' . self::MAX_PROCESS_TIMEOUT_SECONDS . '.'
+            );
+        }
+
+        return (float) $timeoutSeconds;
     }
 
     /**

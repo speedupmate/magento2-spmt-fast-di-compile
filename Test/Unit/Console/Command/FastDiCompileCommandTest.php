@@ -93,6 +93,7 @@ PHP);
         $exitCode = $tester->execute(
             [
                 '--jobs' => '4',
+                '--timeout' => '30',
                 '--fallback-php' => $fallbackPhp,
                 '--php-generated' => 'generated',
                 '--output' => 'var/tmp/fast-di-output',
@@ -178,6 +179,22 @@ PHP);
         $this->assertStringNotContainsString('finished', $tester->getDisplay());
     }
 
+    public function testTimeoutOptionOverridesConfiguredDefault(): void
+    {
+        $binary = $this->createCompilerBinary(<<<'PHP'
+usleep(200000);
+echo 'finished' . PHP_EOL;
+exit(0);
+PHP);
+        $tester = new CommandTester($this->createCommand($binary, 0.05));
+
+        $exitCode = $tester->execute(['--timeout' => '1']);
+
+        $this->assertSame(Command::SUCCESS, $exitCode);
+        $this->assertStringContainsString('finished', $tester->getDisplay());
+        $this->assertStringContainsString('DI compilation complete.', $tester->getDisplay());
+    }
+
     /**
      * @param array<string, mixed> $input
      */
@@ -249,6 +266,18 @@ PHP);
             'too many jobs' => [
                 ['--jobs' => '257'],
                 '--jobs must be less than or equal to 256.',
+            ],
+            'zero timeout' => [
+                ['--timeout' => '0'],
+                '--timeout must be a positive integer.',
+            ],
+            'non numeric timeout' => [
+                ['--timeout' => 'soon'],
+                '--timeout must be a positive integer.',
+            ],
+            'timeout above maximum' => [
+                ['--timeout' => '86401'],
+                '--timeout must be less than or equal to 86400.',
             ],
             'arbitrary fallback executable' => [
                 ['--fallback-php' => '/bin/sh'],
