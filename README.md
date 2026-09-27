@@ -25,7 +25,7 @@
 - Passes Magento's project root to the binary with `--magento-root`.
 - Forwards supported fast-di-compile options from Magento CLI.
 - Keeps forwarded path options to paths inside the Magento project root.
-- Runs the fast-di-compile with a 15-second timeout and returns sanitized console output.
+- Runs fast-di-compile with a configurable timeout (15 seconds by default) and returns sanitized console output.
 - Falls back to Magento's standard PHP compiler when the binary is missing, untrusted or you opt to skip.
 - Provides `--standard` to run Magento's standard PHP compile.
 
@@ -136,6 +136,7 @@ bin/magento setup:di:compile --standard
 | Option | What it does |
 | --- | --- |
 | `--standard` | Run Magento's standard PHP compiler instead of the Rust compiler. |
+| `--timeout 120` | Set the maximum Rust compiler runtime in seconds. Accepted range is `1` through `86400`; the default is `15`. |
 | `--output var/tmp/fast-di-output` | Set the generated output folder. Must resolve inside the Magento project root. |
 | `--jobs 8` | Set parallel workers. Accepted range is `1` through `256`. Sane number is core count -2 or -4 |
 | `--fallback-php /usr/local/bin/php` | Set the PHP executable used by the Rust compiler for fallback reflection. Must resolve to the same PHP binary running Magento CLI. |
@@ -150,6 +151,20 @@ bin/magento setup:di:compile --standard
 | `--ignore-constructor-integrity` | Continue when constructor integrity validation fails. |
 | `-v`, `-vv`, `-vvv` | Forward verbose mode to the Rust compiler as `--verbose`. |
 
+On Linux, reserve two CPUs for the operating system and other services while using the remaining available CPUs for compilation:
+
+```bash
+bin/magento setup:di:compile --jobs "$(nproc --ignore=2)"
+```
+
+On a busier shared server, reserve four instead:
+
+```bash
+bin/magento setup:di:compile --jobs "$(nproc --ignore=4)"
+```
+
+GNU `nproc` returns at least `1`, so both commands remain valid on smaller machines.
+
 ## How it works under the hood
 
 Magento builds console commands through `Magento\Framework\Console\CommandLoader\Aggregate`.
@@ -161,7 +176,7 @@ This module registers a preference for that aggregate loader. When Magento asks 
 
 If a binary is available, the module returns a wrapper command named `setup:di:compile`. The binary must resolve inside `BP`, not symlinked, and its path components must not be writable by group or other users.
 
-The wrapper runs the Rust binary with the canonical Magento root, sets Magento's root as the process working directory, passes the current Magento CLI PHP binary to `--fallback-php`, strips common secret-bearing environment variables, streams sanitized stdout and stderr back to Magento's console output, and returns Magento success or failure codes based on the Rust process exit code. The Rust process timeout is 15 seconds.
+The wrapper runs the Rust binary with the canonical Magento root, sets Magento's root as the process working directory, passes the current Magento CLI PHP binary to `--fallback-php`, strips common secret-bearing environment variables, streams sanitized stdout and stderr back to Magento's console output, and returns Magento success or failure codes based on the Rust process exit code. The Rust process timeout defaults to 15 seconds and can be changed per run with `--timeout`.
 
 If no binary is available, the original Magento command loader handles the command unchanged.
 
