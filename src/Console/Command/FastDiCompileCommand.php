@@ -343,6 +343,8 @@ class FastDiCompileCommand extends Command
             $this->assertWatchAllowed($input, $magentoRoot);
             $command = $this->buildCompilerCommand($input, $output, $magentoRoot);
             $command[] = $this->getWatchFlag($input);
+            // Without pcntl, PHP cannot forward Ctrl+C; the binary then stops when PHP ends.
+            $command[] = '--watch-exit-with-parent';
             $this->assertBinarySupportsWatch($magentoRoot);
         } catch (InvalidArgumentException | RuntimeException $exception) {
             $this->writeError($output, $exception->getMessage());

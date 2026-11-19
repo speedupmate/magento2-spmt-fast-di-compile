@@ -322,7 +322,16 @@ PHP);
         $record = $this->extractRecord($display);
         $this->assertSame(Command::SUCCESS, $exitCode, $display);
         $this->assertSame(
-            ['--magento-root', $this->testRoot, '--fallback-php', realpath(PHP_BINARY), '--jobs', '2', '--watch'],
+            [
+                '--magento-root',
+                $this->testRoot,
+                '--fallback-php',
+                realpath(PHP_BINARY),
+                '--jobs',
+                '2',
+                '--watch',
+                '--watch-exit-with-parent',
+            ],
             $record['argv']
         );
         $this->assertStringContainsString('watch mode', $display);
@@ -342,7 +351,7 @@ PHP);
         $tester->execute($input);
 
         $record = $this->extractRecord($tester->getDisplay());
-        $this->assertSame($expectedFlag, end($record['argv']));
+        $this->assertSame([$expectedFlag, '--watch-exit-with-parent'], array_slice($record['argv'], -2));
     }
 
     /**
