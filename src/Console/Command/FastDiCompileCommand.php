@@ -260,6 +260,11 @@ class FastDiCompileCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
+        if ($input->getOption('standard') && $this->isWatchRequested($input)) {
+            $this->writeError($output, '--standard cannot be combined with --watch or --watch-poll.');
+            return Cli::RETURN_FAILURE;
+        }
+
         if ($input->getOption('standard')) {
             $output->writeln('<info>Running standard setup:di:compile...</info>');
             return $this->standardCommand->run(new ArrayInput([]), $output);

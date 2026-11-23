@@ -404,6 +404,54 @@ PHP);
         ];
     }
 
+    /**
+     * @param array<string, mixed> $input
+     */
+    #[DataProvider('standardWithWatchProvider')]
+    public function testStandardWithWatchIsRefusedBeforeAnyCompiler(array $input): void
+    {
+        putenv('MAGE_MODE=production');
+        $standardCommand = new class extends Command {
+            public bool $executed = false;
+
+            protected function configure(): void
+            {
+                $this->setName(DiCompileCommand::NAME);
+            }
+
+            protected function execute(InputInterface $input, OutputInterface $output): int
+            {
+                $this->executed = true;
+
+                return Command::SUCCESS;
+            }
+        };
+        $command = new FastDiCompileCommand($this->createWatchBinary(), $standardCommand);
+        $tester = new CommandTester($command);
+
+        $exitCode = $tester->execute($input);
+
+        $this->assertSame(1, $exitCode);
+        $this->assertFalse($standardCommand->executed);
+        $this->assertStringContainsString(
+            '--standard cannot be combined with --watch or --watch-poll.',
+            $tester->getDisplay()
+        );
+        $this->assertStringNotContainsString('FAST_RECORD', $tester->getDisplay());
+    }
+
+    /**
+     * @return array<string, array{0: array<string, mixed>}>
+     */
+    public static function standardWithWatchProvider(): array
+    {
+        return [
+            'with watch' => [['--standard' => true, '--watch' => true]],
+            'with watch poll' => [['--standard' => true, '--watch-poll' => '250']],
+            'with watch poll default' => [['--standard' => true, '--watch-poll' => null]],
+        ];
+    }
+
     public function testProductionModeFromEnvPhpRefusesWatch(): void
     {
         putenv('MAGE_MODE');
