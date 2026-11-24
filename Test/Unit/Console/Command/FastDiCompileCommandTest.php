@@ -295,7 +295,7 @@ PHP);
         ];
     }
 
-    private function createWatchBinary(string $version = 'fast-di-compile v1.1.0', int $exitCode = 0): string
+    private function createWatchBinary(string $version = 'fast-di-compile v1.0.5', int $exitCode = 0): string
     {
         $versionLine = var_export($version, true);
 
@@ -368,7 +368,7 @@ PHP);
     public function testWatchReturnsTheExitCodeOfTheBinary(): void
     {
         putenv('MAGE_MODE=developer');
-        $tester = new CommandTester($this->createCommand($this->createWatchBinary('fast-di-compile v1.1.0', 130)));
+        $tester = new CommandTester($this->createCommand($this->createWatchBinary('fast-di-compile v1.0.5', 130)));
 
         $this->assertSame(130, $tester->execute(['--watch' => true]));
     }
@@ -479,7 +479,7 @@ PHP);
         }
 
         $this->assertSame(1, $exitCode);
-        $this->assertStringContainsString('--watch needs fast-di-compile 1.1.0 or newer', $display);
+        $this->assertStringContainsString('--watch needs fast-di-compile 1.0.5 or newer', $display);
         $this->assertStringContainsString('install-fast-di-compile.php', $display);
         $this->assertStringNotContainsString('FAST_RECORD', $display);
     }
@@ -490,10 +490,12 @@ PHP);
     public static function binaryVersionProvider(): array
     {
         return [
-            'release' => ['fast-di-compile v1.1.0', true],
+            'release' => ['fast-di-compile v1.0.5', true],
+            'newer patch' => ['fast-di-compile v1.0.10', true],
+            'newer minor' => ['fast-di-compile v1.1.0', true],
             'newer release' => ['fast-di-compile v1.2.3', true],
-            'local build' => ['fast-di-compile v1.1.0-3-gabc1234', true],
-            'modified local build' => ['fast-di-compile v1.1.0-3-gabc1234-modified', true],
+            'local build' => ['fast-di-compile v1.0.5-3-gabc1234', true],
+            'modified local build' => ['fast-di-compile v1.0.5-3-gabc1234-modified', true],
             'older release' => ['fast-di-compile v1.0.4', false],
             'older local build' => ['fast-di-compile v1.0.4-9-gabc1234', false],
             'unknown output' => ['something else', false],

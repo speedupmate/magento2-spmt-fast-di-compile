@@ -38,7 +38,7 @@ class FastDiCompileCommand extends Command
     /**
      * First fast-di-compile release with --watch.
      */
-    private const MIN_WATCH_VERSION = '1.1.0';
+    private const MIN_WATCH_VERSION = '1.0.5';
 
     /**
      * Maximum accepted polling interval for --watch-poll, in milliseconds.
@@ -494,7 +494,7 @@ class FastDiCompileCommand extends Command
 
     /**
      * The release version in `fast-di-compile --version` output. A local build reports
-     * `v1.1.0-3-gabc1234` or `v1.1.0-3-gabc1234-modified`, which counts as 1.1.0.
+     * `v1.0.5-3-gabc1234` or `v1.0.5-3-gabc1234-modified`, which counts as 1.0.5.
      *
      * @param string $reported
      * @return string|null

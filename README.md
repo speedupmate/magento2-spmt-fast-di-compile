@@ -188,7 +188,7 @@ store runs without compiled metadata until the next successful compile
 - A failed compile removes `generated/metadata`, so the store runs in developer runtime mode (slower, never stale) until the next successful compile.
 - Ctrl+C stops a running compile and cleans up.
 - If file events do not arrive (some Docker Desktop and network mounts), use `--watch-poll`.
-- Watch mode needs `fast-di-compile` 1.1.0 or newer, refuses production mode, and cannot be combined with `--timeout`, `--dry-run`, `--validate` or `--compare-archive`.
+- Watch mode needs `fast-di-compile` 1.0.5 or newer, refuses production mode, and cannot be combined with `--timeout`, `--dry-run`, `--validate` or `--compare-archive`.
 
 ## How it works under the hood
 
