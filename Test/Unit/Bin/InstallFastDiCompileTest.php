@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Spmt\FastDiCompile\Test\Unit\Bin;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -49,17 +50,48 @@ class InstallFastDiCompileTest extends TestCase
         $this->assertSame([], preg_grep('/^Authorization:/i', $headers));
     }
 
-    public function testGithubApiHeadersCarryTheToken(): void
+    #[DataProvider('tokenProvider')]
+    public function testGithubApiHeadersCarryTheToken(string $token): void
     {
-        $this->assertContains('Authorization: Bearer ghs_abc123', \githubApiHeaders('ghs_abc123'));
+        $this->assertContains('Authorization: Bearer ' . $token, \githubApiHeaders($token));
     }
 
-    public function testGithubApiHeadersRejectATokenThatWouldAddAHeader(): void
+    /**
+     * Classic, fine-grained and Actions tokens, and a longer form with `.`, `-` and `=`.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function tokenProvider(): array
+    {
+        return [
+            'classic' => ['ghp_' . str_repeat('a1B2', 9)],
+            'fine-grained' => ['github_pat_11AB_' . str_repeat('x9', 20)],
+            'actions' => ['ghs_' . str_repeat('Z0', 18)],
+            'longer form' => ['ghs_eyJhbGciOi.eyJpc3Mi-Ii_x=='],
+        ];
+    }
+
+    #[DataProvider('unsafeTokenProvider')]
+    public function testGithubApiHeadersRejectATokenThatCouldAddAHeader(string $token): void
     {
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('characters that a GitHub token does not have');
+        $this->expectExceptionMessage('holds a space or a control character');
 
-        \githubApiHeaders("ghs_abc\r\nX-Injected: 1");
+        \githubApiHeaders($token);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function unsafeTokenProvider(): array
+    {
+        return [
+            'line break' => ["ghs_abc\r\nX-Injected: 1"],
+            'newline' => ["ghs_abc\nX-Injected: 1"],
+            'space' => ['ghs_abc def'],
+            'tab' => ["ghs_abc\tdef"],
+            'null byte' => ["ghs_abc\0def"],
+        ];
     }
 
     public function testGithubTokenReadsGithubTokenBeforeGhToken(): void

@@ -371,9 +371,10 @@ function githubApiHeaders(?string $token): array
     if ($token === null) {
         return $headers;
     }
-    // GitHub tokens are letters, digits and `_`; anything else would end up in a header line.
-    if (preg_match('/^[A-Za-z0-9_]+$/', $token) !== 1) {
-        throw new RuntimeException('GITHUB_TOKEN or GH_TOKEN holds characters that a GitHub token does not have.');
+    // Token formats change, so any visible ASCII passes; a space or control character could end
+    // the header line and start another one.
+    if (preg_match('/^[\x21-\x7E]+$/', $token) !== 1) {
+        throw new RuntimeException('GITHUB_TOKEN or GH_TOKEN holds a space or a control character.');
     }
     $headers[] = 'Authorization: Bearer ' . $token;
 
