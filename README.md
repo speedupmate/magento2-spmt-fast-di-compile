@@ -82,6 +82,13 @@ Useful installer options:
 | `--force` | Replace a symlink or a binary that is not the selected release. |
 | `--install-dir /path/to/bin` | Install into a custom directory. |
 
+GitHub limits API requests without a token per IP address, which a shared CI runner or office network can use up; the installer then stops with HTTP 403. Set `GITHUB_TOKEN` (or `GH_TOKEN`) to any GitHub token to raise the limit. The installer sends it to `api.github.com` only. In GitHub Actions, the job's own token is enough:
+
+```yaml
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+```
+
 Installed binary is replaced when the selected release archive digest changes. A symlink, or a file that is not the selected release, stays in place unless `--force` is set. The verification file `fast-di-compile.release-stamp` only avoids a repeat download; anyone who can write the install directory can forge it, so regular risks on executing binaries downloaded from intenret is involved.
 
 Release asset suffixes are:

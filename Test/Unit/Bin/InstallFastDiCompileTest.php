@@ -14,17 +14,90 @@ require_once dirname(__DIR__, 3) . '/bin/install-fast-di-compile.php';
  */
 class InstallFastDiCompileTest extends TestCase
 {
+    private const TOKEN_VARIABLES = ['GITHUB_TOKEN', 'GH_TOKEN'];
+
     private string $testRoot;
+
+    /**
+     * @var array<string, string|false>
+     */
+    private array $savedEnvironment = [];
 
     protected function setUp(): void
     {
         $this->testRoot = sys_get_temp_dir() . '/spmt-fast-di-compile-test-' . bin2hex(random_bytes(6));
         mkdir($this->testRoot, 0700, true);
+        foreach (self::TOKEN_VARIABLES as $name) {
+            $this->savedEnvironment[$name] = getenv($name);
+            putenv($name);
+        }
     }
 
     protected function tearDown(): void
     {
         \removePath($this->testRoot);
+        foreach ($this->savedEnvironment as $name => $value) {
+            putenv($value === false ? $name : $name . '=' . $value);
+        }
+    }
+
+    public function testGithubApiHeadersCarryNoTokenWithoutOne(): void
+    {
+        $headers = \githubApiHeaders(null);
+
+        $this->assertContains('Accept: application/vnd.github+json', $headers);
+        $this->assertSame([], preg_grep('/^Authorization:/i', $headers));
+    }
+
+    public function testGithubApiHeadersCarryTheToken(): void
+    {
+        $this->assertContains('Authorization: Bearer ghs_abc123', \githubApiHeaders('ghs_abc123'));
+    }
+
+    public function testGithubApiHeadersRejectATokenThatWouldAddAHeader(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('characters that a GitHub token does not have');
+
+        \githubApiHeaders("ghs_abc\r\nX-Injected: 1");
+    }
+
+    public function testGithubTokenReadsGithubTokenBeforeGhToken(): void
+    {
+        $this->assertNull(\githubToken());
+
+        putenv('GH_TOKEN=gho_second');
+        $this->assertSame('gho_second', \githubToken());
+
+        putenv('GITHUB_TOKEN=ghs_first');
+        $this->assertSame('ghs_first', \githubToken());
+    }
+
+    public function testRateLimitedApiRequestNamesGithubToken(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/HTTP 403.*set GITHUB_TOKEN/');
+
+        \assertSuccessfulHttpStatus(403, 'https://api.github.com/repos/speedupmate/di-compiler/releases/latest');
+    }
+
+    public function testRefusedApiRequestWithATokenSaysSo(): void
+    {
+        putenv('GITHUB_TOKEN=ghs_expired');
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/HTTP 403.*refused the request with the token/');
+
+        \assertSuccessfulHttpStatus(403, 'https://api.github.com/repos/speedupmate/di-compiler/releases/latest');
+    }
+
+    public function testRefusedDownloadOutsideTheApiHasNoTokenHint(): void
+    {
+        try {
+            \assertSuccessfulHttpStatus(403, 'https://github.com/speedupmate/di-compiler/releases/download/v1.0.5/a.tar.gz');
+            $this->fail('A 403 must be an error.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringNotContainsString('GITHUB_TOKEN', $exception->getMessage());
+        }
     }
 
     public function testPrepareInstallDirectoryPreservesExistingPrivatePermissions(): void
