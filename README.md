@@ -82,6 +82,13 @@ Useful installer options:
 | `--force` | Replace a symlink or a binary that is not the selected release. |
 | `--install-dir /path/to/bin` | Install into a custom directory. |
 
+GitHub limits API requests without a token per IP address, which a shared CI runner or office network can use up; the installer then stops with HTTP 403. Set `GITHUB_TOKEN` (or `GH_TOKEN`) to any GitHub token to raise the limit. The installer sends it to `api.github.com` only. In GitHub Actions, the job's own token is enough:
+
+```yaml
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+```
+
 Installed binary is replaced when the selected release archive digest changes. A symlink, or a file that is not the selected release, stays in place unless `--force` is set. The verification file `fast-di-compile.release-stamp` only avoids a repeat download; anyone who can write the install directory can forge it, so regular risks on executing binaries downloaded from intenret is involved.
 
 Release asset suffixes are:
@@ -149,6 +156,8 @@ bin/magento setup:di:compile --standard
 | `--compare-report-dir var/tmp/fast-di-output/diff` | Set where archive diff reports are written. Must resolve inside the Magento project root. |
 | `--compare-fail-on-diff` | Exit with failure when archive comparison finds differences. |
 | `--ignore-constructor-integrity` | Continue when constructor integrity validation fails. |
+| `--watch` | Compile, then compile again after every relevant code change until Ctrl+C. See [Watch mode](#watch-mode). |
+| `--watch-poll`, `--watch-poll=500` | Like `--watch`, polling every 1000 ms (or the given milliseconds, `1` through `60000`) instead of file events. |
 | `-v`, `-vv`, `-vvv` | Forward verbose mode to the Rust compiler as `--verbose`. |
 
 On Linux, reserve two CPUs for the operating system and other services while using the remaining available CPUs for compilation:
@@ -164,6 +173,29 @@ bin/magento setup:di:compile --jobs "$(nproc --ignore=4)"
 ```
 
 GNU `nproc` returns at least `1`, so both commands remain valid on smaller machines.
+
+## Watch mode
+
+Magento uses compiled DI metadata as soon as `generated/metadata/global.php` exists, in developer mode too. Without a new compile, a changed `di.xml`, plugin, preference or constructor is ignored or fails with a `TypeError`. Watch mode keeps the compile current while you work:
+
+```bash
+bin/magento setup:di:compile --watch
+```
+
+It compiles once, then again about 2 seconds after you save a PHP class, a `di.xml`, a `module.xml`, `app/etc/config.php` or after `composer install`. Each compile prints one line:
+
+```
+12:04:31 ✓ compiled in 1.48s, 3 files written — app/code/Acme/On/etc/di.xml
+12:05:02 ✗ failed in 0.91s — app/code/Acme/On/etc/frontend/di.xml
+error: Class Acme\On\Model\Sealed\Interceptor cannot extend final class Acme\On\Model\Sealed
+store runs without compiled metadata until the next successful compile
+```
+
+- No cache command is needed after a compile. After a change of `app/etc/config.php` the watcher runs `cache:clean config compiled_config` itself.
+- A failed compile removes `generated/metadata`, so the store runs in developer runtime mode (slower, never stale) until the next successful compile.
+- Ctrl+C stops a running compile and cleans up.
+- If file events do not arrive (some Docker Desktop and network mounts), use `--watch-poll`.
+- Watch mode needs `fast-di-compile` 1.0.5 or newer, refuses production mode, and cannot be combined with `--timeout`, `--dry-run`, `--validate` or `--compare-archive`.
 
 ## How it works under the hood
 

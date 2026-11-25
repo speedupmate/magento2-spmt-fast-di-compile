@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Spmt\FastDiCompile\Test\Unit\Bin;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -14,17 +15,121 @@ require_once dirname(__DIR__, 3) . '/bin/install-fast-di-compile.php';
  */
 class InstallFastDiCompileTest extends TestCase
 {
+    private const TOKEN_VARIABLES = ['GITHUB_TOKEN', 'GH_TOKEN'];
+
     private string $testRoot;
+
+    /**
+     * @var array<string, string|false>
+     */
+    private array $savedEnvironment = [];
 
     protected function setUp(): void
     {
         $this->testRoot = sys_get_temp_dir() . '/spmt-fast-di-compile-test-' . bin2hex(random_bytes(6));
         mkdir($this->testRoot, 0700, true);
+        foreach (self::TOKEN_VARIABLES as $name) {
+            $this->savedEnvironment[$name] = getenv($name);
+            putenv($name);
+        }
     }
 
     protected function tearDown(): void
     {
         \removePath($this->testRoot);
+        foreach ($this->savedEnvironment as $name => $value) {
+            putenv($value === false ? $name : $name . '=' . $value);
+        }
+    }
+
+    public function testGithubApiHeadersCarryNoTokenWithoutOne(): void
+    {
+        $headers = \githubApiHeaders(null);
+
+        $this->assertContains('Accept: application/vnd.github+json', $headers);
+        $this->assertSame([], preg_grep('/^Authorization:/i', $headers));
+    }
+
+    #[DataProvider('tokenProvider')]
+    public function testGithubApiHeadersCarryTheToken(string $token): void
+    {
+        $this->assertContains('Authorization: Bearer ' . $token, \githubApiHeaders($token));
+    }
+
+    /**
+     * Classic, fine-grained and Actions tokens, and a longer form with `.`, `-` and `=`.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function tokenProvider(): array
+    {
+        return [
+            'classic' => ['ghp_' . str_repeat('a1B2', 9)],
+            'fine-grained' => ['github_pat_11AB_' . str_repeat('x9', 20)],
+            'actions' => ['ghs_' . str_repeat('Z0', 18)],
+            'longer form' => ['ghs_eyJhbGciOi.eyJpc3Mi-Ii_x=='],
+        ];
+    }
+
+    #[DataProvider('unsafeTokenProvider')]
+    public function testGithubApiHeadersRejectATokenThatCouldAddAHeader(string $token): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('holds a space or a control character');
+
+        \githubApiHeaders($token);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function unsafeTokenProvider(): array
+    {
+        return [
+            'line break' => ["ghs_abc\r\nX-Injected: 1"],
+            'newline' => ["ghs_abc\nX-Injected: 1"],
+            'space' => ['ghs_abc def'],
+            'tab' => ["ghs_abc\tdef"],
+            'null byte' => ["ghs_abc\0def"],
+        ];
+    }
+
+    public function testGithubTokenReadsGithubTokenBeforeGhToken(): void
+    {
+        $this->assertNull(\githubToken());
+
+        putenv('GH_TOKEN=gho_second');
+        $this->assertSame('gho_second', \githubToken());
+
+        putenv('GITHUB_TOKEN=ghs_first');
+        $this->assertSame('ghs_first', \githubToken());
+    }
+
+    public function testRateLimitedApiRequestNamesGithubToken(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/HTTP 403.*set GITHUB_TOKEN/');
+
+        \assertSuccessfulHttpStatus(403, 'https://api.github.com/repos/speedupmate/di-compiler/releases/latest');
+    }
+
+    public function testRefusedApiRequestWithATokenSaysSo(): void
+    {
+        putenv('GITHUB_TOKEN=ghs_expired');
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessageMatches('/HTTP 403.*refused the request with the token/');
+
+        \assertSuccessfulHttpStatus(403, 'https://api.github.com/repos/speedupmate/di-compiler/releases/latest');
+    }
+
+    public function testRefusedDownloadOutsideTheApiHasNoTokenHint(): void
+    {
+        try {
+            \assertSuccessfulHttpStatus(403, 'https://github.com/speedupmate/di-compiler/releases/download/v1.0.5/a.tar.gz');
+            $this->fail('A 403 must be an error.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringNotContainsString('GITHUB_TOKEN', $exception->getMessage());
+        }
     }
 
     public function testPrepareInstallDirectoryPreservesExistingPrivatePermissions(): void

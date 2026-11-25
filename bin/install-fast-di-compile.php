@@ -151,6 +151,11 @@ Options:
                          A newer release replaces a previously stamped install without --force.
   -h, --help             Show this help.
 
+Environment:
+  GITHUB_TOKEN           A GitHub token for the API request (GH_TOKEN works too). GitHub limits
+                         requests without one per IP address, which shared CI runners can reach.
+                         It is sent to api.github.com only.
+
 HELP);
 }
 
@@ -337,6 +342,46 @@ function githubDownloadUrl(string $version, string $assetName): string
 }
 
 /**
+ * The token from GITHUB_TOKEN, else GH_TOKEN, or null when neither is set.
+ */
+function githubToken(): ?string
+{
+    foreach (['GITHUB_TOKEN', 'GH_TOKEN'] as $name) {
+        $value = getenv($name);
+        if (is_string($value) && trim($value) !== '') {
+            return trim($value);
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Headers of the GitHub API request. A token raises the rate limit that requests without one
+ * share per IP address. Only this request carries it: its allowed hosts are api.github.com alone.
+ *
+ * @return string[]
+ */
+function githubApiHeaders(?string $token): array
+{
+    $headers = [
+        'Accept: application/vnd.github+json',
+        'X-GitHub-Api-Version: 2022-11-28',
+    ];
+    if ($token === null) {
+        return $headers;
+    }
+    // Token formats change, so any visible ASCII passes; a space or control character could end
+    // the header line and start another one.
+    if (preg_match('/^[\x21-\x7E]+$/', $token) !== 1) {
+        throw new RuntimeException('GITHUB_TOKEN or GH_TOKEN holds a space or a control character.');
+    }
+    $headers[] = 'Authorization: Bearer ' . $token;
+
+    return $headers;
+}
+
+/**
  * @return array{version: string, digests: array<string, string>}
  */
 function fetchRelease(string $tmpRoot, ?string $requestedVersion): array
@@ -347,10 +392,7 @@ function fetchRelease(string $tmpRoot, ?string $requestedVersion): array
         $responsePath,
         MAX_RELEASE_JSON_BYTES,
         [GITHUB_API_HOST],
-        [
-            'Accept: application/vnd.github+json',
-            'X-GitHub-Api-Version: 2022-11-28',
-        ]
+        githubApiHeaders(githubToken())
     );
     $body = file_get_contents($responsePath);
     if (!is_string($body)) {
@@ -820,9 +862,17 @@ function assertHttpsUrl(string $url, array $allowedHosts): void
 
 function assertSuccessfulHttpStatus(int $statusCode, string $url): void
 {
-    if ($statusCode < 200 || $statusCode >= 300) {
-        throw new RuntimeException('Unable to download ' . $url . ' (HTTP ' . $statusCode . ')');
+    if ($statusCode >= 200 && $statusCode < 300) {
+        return;
     }
+    $message = 'Unable to download ' . $url . ' (HTTP ' . $statusCode . ')';
+    $isApi = parse_url($url, PHP_URL_HOST) === GITHUB_API_HOST;
+    if ($isApi && in_array($statusCode, [401, 403, 429], true)) {
+        $message .= githubToken() === null
+            ? '. GitHub limits API requests without a token per IP address; set GITHUB_TOKEN to a GitHub token to raise the limit.'
+            : '. GitHub refused the request with the token from GITHUB_TOKEN or GH_TOKEN, or its rate limit is reached.';
+    }
+    throw new RuntimeException($message);
 }
 
 function validateArchive(string $archivePath): string

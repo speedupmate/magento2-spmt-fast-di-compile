@@ -36,6 +36,31 @@ class FastDiCompileCommand extends Command
     private const MAX_JOBS = 256;
 
     /**
+     * First fast-di-compile release with --watch.
+     */
+    private const MIN_WATCH_VERSION = '1.0.5';
+
+    /**
+     * Maximum accepted polling interval for --watch-poll, in milliseconds.
+     */
+    private const MAX_WATCH_POLL_MS = 60000;
+
+    /**
+     * Maximum time allowed for `fast-di-compile --version`.
+     */
+    private const VERSION_CHECK_TIMEOUT_SECONDS = 3;
+
+    /**
+     * Options that only make sense for a single compile.
+     */
+    private const ONE_OFF_OPTIONS = ['dry-run', 'validate', 'compare-archive', 'compare-fail-on-diff'];
+
+    /**
+     * Command that installs or updates the bundled compiler binary.
+     */
+    private const INSTALLER_COMMAND = 'php vendor/spmt/magento2-spmt-fast-di-compile/bin/install-fast-di-compile.php';
+
+    /**
      * Rust binary path options that must resolve inside Magento's project root.
      */
     private const ROOT_PATH_OPTIONS = [
@@ -211,6 +236,18 @@ class FastDiCompileCommand extends Command
                 null,
                 InputOption::VALUE_NONE,
                 'Continue when Magento-style constructor integrity validation fails'
+            )
+            ->addOption(
+                'watch',
+                null,
+                InputOption::VALUE_NONE,
+                'Compile, then compile again after every relevant code change until Ctrl+C (development)'
+            )
+            ->addOption(
+                'watch-poll',
+                null,
+                InputOption::VALUE_OPTIONAL,
+                'Like --watch, polling every MS milliseconds (default 1000) instead of file events'
             );
     }
 
@@ -223,9 +260,18 @@ class FastDiCompileCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
+        if ($input->getOption('standard') && $this->isWatchRequested($input)) {
+            $this->writeError($output, '--standard cannot be combined with --watch or --watch-poll.');
+            return Cli::RETURN_FAILURE;
+        }
+
         if ($input->getOption('standard')) {
             $output->writeln('<info>Running standard setup:di:compile...</info>');
             return $this->standardCommand->run(new ArrayInput([]), $output);
+        }
+
+        if ($this->isWatchRequested($input)) {
+            return $this->executeWatch($input, $output);
         }
 
         try {
@@ -275,6 +321,238 @@ class FastDiCompileCommand extends Command
 
         $output->writeln('<info>DI compilation complete.</info>');
         return Cli::RETURN_SUCCESS;
+    }
+
+    /**
+     * Whether --watch or --watch-poll was given.
+     *
+     * @param InputInterface $input
+     * @return bool
+     */
+    private function isWatchRequested(InputInterface $input): bool
+    {
+        return $input->getOption('watch') || $input->hasParameterOption('--watch-poll', true);
+    }
+
+    /**
+     * Run the compiler in watch mode until it exits.
+     *
+     * @param InputInterface $input
+     * @param OutputInterface $output
+     * @return int
+     */
+    private function executeWatch(InputInterface $input, OutputInterface $output): int
+    {
+        try {
+            $magentoRoot = $this->getMagentoRoot();
+            $this->assertWatchAllowed($input, $magentoRoot);
+            $command = $this->buildCompilerCommand($input, $output, $magentoRoot);
+            $command[] = $this->getWatchFlag($input);
+            // Without pcntl, PHP cannot forward Ctrl+C; the binary then stops when PHP ends.
+            $command[] = '--watch-exit-with-parent';
+            $this->assertBinarySupportsWatch($magentoRoot);
+        } catch (InvalidArgumentException | RuntimeException $exception) {
+            $this->writeError($output, $exception->getMessage());
+            return Cli::RETURN_FAILURE;
+        }
+
+        $output->writeln('<info>Running fast-di-compile in watch mode, Ctrl+C to stop...</info>');
+
+        $process = new Process($command, $magentoRoot, $this->getRestrictedEnvironment($magentoRoot));
+        $process->setTimeout(null);
+        $process->setIdleTimeout(null);
+
+        try {
+            $process->start(
+                function (string $type, string $buffer) use ($output): void {
+                    $output->write($this->sanitizeProcessOutput($buffer), false, OutputInterface::OUTPUT_RAW);
+                }
+            );
+            $previousHandlers = $this->forwardStopSignals($process);
+            $exitCode = $process->wait();
+            $this->restoreSignalHandlers($previousHandlers);
+        } catch (RuntimeException $exception) {
+            $this->writeError($output, 'Unable to run fast-di-compile: ' . $exception->getMessage());
+            return Cli::RETURN_FAILURE;
+        }
+
+        return $exitCode === 0 ? Cli::RETURN_SUCCESS : (int) $exitCode;
+    }
+
+    /**
+     * Reject watch mode for production stores and for options that only fit a single compile.
+     *
+     * @param InputInterface $input
+     * @param string $magentoRoot
+     * @return void
+     */
+    private function assertWatchAllowed(InputInterface $input, string $magentoRoot): void
+    {
+        $mode = $this->getDeployMode($magentoRoot);
+        if ($mode === 'production') {
+            throw new InvalidArgumentException('--watch is for development; current mode is production.');
+        }
+
+        if ($input->getOption('timeout') !== null) {
+            throw new InvalidArgumentException('--timeout cannot be combined with --watch.');
+        }
+
+        foreach (self::ONE_OFF_OPTIONS as $option) {
+            if ($input->getOption($option)) {
+                throw new InvalidArgumentException('--' . $option . ' cannot be combined with --watch.');
+            }
+        }
+    }
+
+    /**
+     * Resolve the deploy mode as Magento does.
+     *
+     * The MAGE_MODE environment variable wins over MAGE_MODE in app/etc/env.php; without either
+     * the mode is "default".
+     *
+     * @param string $magentoRoot
+     * @return string
+     */
+    private function getDeployMode(string $magentoRoot): string
+    {
+        $mode = $this->readEnvironmentVariable('MAGE_MODE');
+        if ($mode !== null && $mode !== '') {
+            return $mode;
+        }
+
+        $envFile = $magentoRoot . '/app/etc/env.php';
+        if ((new SplFileInfo($envFile))->isFile()) {
+            // phpcs:ignore Magento2.Security.IncludeFile.FoundIncludeFile -- Magento's own deployment config.
+            $config = include $envFile;
+            if (is_array($config) && isset($config['MAGE_MODE']) && is_string($config['MAGE_MODE'])) {
+                return $config['MAGE_MODE'];
+            }
+        }
+
+        return 'default';
+    }
+
+    /**
+     * The watch flag for the binary: --watch, or --watch-poll=MS.
+     *
+     * @param InputInterface $input
+     * @return string
+     */
+    private function getWatchFlag(InputInterface $input): string
+    {
+        if (!$input->hasParameterOption('--watch-poll', true)) {
+            return '--watch';
+        }
+
+        $interval = $input->getOption('watch-poll');
+        if ($interval === null) {
+            return '--watch-poll';
+        }
+
+        $interval = (string) $interval;
+        if (preg_match('/^[1-9][0-9]*$/', $interval) !== 1 || (int) $interval > self::MAX_WATCH_POLL_MS) {
+            throw new InvalidArgumentException(
+                '--watch-poll must be a whole number of milliseconds from 1 to ' . self::MAX_WATCH_POLL_MS . '.'
+            );
+        }
+
+        return '--watch-poll=' . (int) $interval;
+    }
+
+    /**
+     * Require a binary release that knows --watch.
+     *
+     * @param string $magentoRoot
+     * @return void
+     */
+    private function assertBinarySupportsWatch(string $magentoRoot): void
+    {
+        $process = new Process(
+            [$this->binary, '--version'],
+            $magentoRoot,
+            $this->getRestrictedEnvironment($magentoRoot)
+        );
+        $process->setTimeout(self::VERSION_CHECK_TIMEOUT_SECONDS);
+
+        try {
+            $process->run();
+            $reported = trim($process->getOutput());
+        } catch (RuntimeException $exception) {
+            $reported = '';
+        }
+
+        $version = $this->parseBinaryVersion($reported);
+        if ($version !== null && version_compare($version, self::MIN_WATCH_VERSION, '>=')) {
+            return;
+        }
+
+        throw new RuntimeException(
+            '--watch needs fast-di-compile ' . self::MIN_WATCH_VERSION . ' or newer; found '
+            . ($version ?? 'an unknown version') . '. Update it with: ' . self::INSTALLER_COMMAND
+        );
+    }
+
+    /**
+     * The release version in `fast-di-compile --version` output. A local build reports
+     * `v1.0.5-3-gabc1234` or `v1.0.5-3-gabc1234-modified`, which counts as 1.0.5.
+     *
+     * @param string $reported
+     * @return string|null
+     */
+    private function parseBinaryVersion(string $reported): ?string
+    {
+        $pattern = '/^fast-di-compile v([0-9]+\.[0-9]+\.[0-9]+)(?:-[0-9]+-g[0-9a-f]+)?(?:-modified)?$/';
+        if (preg_match($pattern, $reported, $matches) !== 1) {
+            return null;
+        }
+
+        return $matches[1];
+    }
+
+    /**
+     * Forward SIGINT and SIGTERM to the binary, so it stops its running compile and cleans up.
+     *
+     * @param Process $process
+     * @return array<int, mixed>
+     */
+    private function forwardStopSignals(Process $process): array
+    {
+        if (!function_exists('pcntl_signal') || !function_exists('pcntl_async_signals')) {
+            return [];
+        }
+
+        // phpcs:ignore Magento2.Functions.DiscouragedFunction.Discouraged -- Ctrl+C must reach the binary.
+        pcntl_async_signals(true);
+        $previous = [];
+        foreach ([SIGINT, SIGTERM] as $signal) {
+            // phpcs:ignore Magento2.Functions.DiscouragedFunction.Discouraged -- Restored after watch mode.
+            $previous[$signal] = pcntl_signal_get_handler($signal);
+            // phpcs:ignore Magento2.Functions.DiscouragedFunction.Discouraged -- Ctrl+C must reach the binary.
+            pcntl_signal(
+                $signal,
+                static function (int $received) use ($process): void {
+                    if ($process->isRunning()) {
+                        $process->signal($received);
+                    }
+                }
+            );
+        }
+
+        return $previous;
+    }
+
+    /**
+     * Put back the signal handlers that were active before watch mode.
+     *
+     * @param array $previous
+     * @return void
+     */
+    private function restoreSignalHandlers(array $previous): void
+    {
+        foreach ($previous as $signal => $handler) {
+            // phpcs:ignore Magento2.Functions.DiscouragedFunction.Discouraged -- Restores the earlier handler.
+            pcntl_signal($signal, $handler);
+        }
     }
 
     /**
